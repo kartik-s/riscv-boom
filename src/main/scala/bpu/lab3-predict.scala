@@ -4,6 +4,9 @@ import chisel3._
 import chisel3.util._
 import freechips.rocketchip.config.{Parameters, Field}
 
+/*
+ * A table of (1 << width) two-bit predictors.
+ */
 class TBPTable(width: Int) extends Module {
   require(width >= 0)
 
@@ -37,6 +40,10 @@ class TBPTable(width: Int) extends Module {
   io.prediction := predictors(io.index)(1)
 }
 
+/*
+ * Common bundle for predictor IO. The update sub-bundle is used to pass
+ * information needed for updating the predictor.
+ */
 class PredictorIO(addrWidth: Int, historyLen: Int) extends Bundle {
   val addr = Input(UInt(addrWidth.W))
   val history = Input(UInt(historyLen.W))
@@ -51,16 +58,22 @@ class PredictorIO(addrWidth: Int, historyLen: Int) extends Bundle {
   }
 }
 
+/*
+ * Two-level local predictor. Top level contains local histories indexed by
+ * branch address, second level contains two-bit predictors indexed by
+ * local history.
+ */
 class LocalPredictor(width: Int, historyLen: Int) extends Module {
   val io = IO(new PredictorIO(
     addrWidth = width,
     historyLen = historyLen
   ))
 
+  // top-level
   val localHistory = RegInit(VecInit(
     Seq.fill(1 << width)(0.U(historyLen.W))
   ))
-
+  // two-bit predictors
   val predictors = Module(new TBPTable(width = historyLen))
 
   // update predictor
@@ -78,6 +91,11 @@ class LocalPredictor(width: Int, historyLen: Int) extends Module {
   io.prediction := predictors.io.prediction
 }
 
+/*
+ * A predictor consisting of a table of two-bit predictors indexed by some
+ * combination of branch address and global history specified by a hash
+ * function.
+ */
 class HybridPredictor(width: Int, hash: (UInt, UInt) => UInt) extends Module {
   require (width >= 0)
 
@@ -98,6 +116,10 @@ class HybridPredictor(width: Int, hash: (UInt, UInt) => UInt) extends Module {
   io.prediction := table.io.prediction
 }
 
+/*
+ * A tournament predictor consisting of a local predictor, a global predictor,
+ * and a selector to choose between the two predictors.
+ */
 class TourneyPredictor(historyLen: Int) extends Module {
   val io = IO(new PredictorIO(
     addrWidth = historyLen,
@@ -108,17 +130,16 @@ class TourneyPredictor(historyLen: Int) extends Module {
     width = historyLen,
     hash = (addr, _) => addr(historyLen - 1, 0)
   ))
-
   val globalPredictor = Module(new HybridPredictor(
     width = historyLen,
     hash = (addr, hist) => addr ^ hist
   ))
-
   val localPredictor = Module(new LocalPredictor(
     width = historyLen,
     historyLen = historyLen
   ))
 
+  // the last selection direction
   val lastSelect = RegNext(selector.io.prediction)
 
   // update selector
@@ -148,6 +169,10 @@ class TourneyPredictor(historyLen: Int) extends Module {
     localPredictor.io.prediction)
 }
 
+/*
+ * Bundle for organizing info passed back to the branch predictor through
+ * the last commit.
+ */
 class CommitInfo(addrWidth: Int, historyLen: Int) extends Bundle {
   val addr = UInt(addrWidth.W)
   val history = UInt(historyLen.W)
@@ -158,7 +183,7 @@ class CommitInfo(addrWidth: Int, historyLen: Int) extends Bundle {
 
 case class Lab3Parameters(
   enabled: Boolean = true,
-  history_length: Int = 18, info_size: Int = 36)
+  history_length: Int = 10, info_size: Int = 21)
 
 case object Lab3Key extends Field[Lab3Parameters]
 
@@ -214,3 +239,4 @@ extends BrPredictor(fetch_width, history_length)(p)
   info.prediction := predictor.io.prediction
   io.resp.bits.info := info.asUInt()
 }
+
